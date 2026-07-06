@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+
+body {
+  background: #050308;
+  color: #f3eefc;
+}
+
+.card {
+  background: rgba(255,255,255,0.045);
+  border: 1px solid rgba(255,255,255,0.09);
+  backdrop-filter: blur(10px);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #8b5cf6, #ec4899);
+  color: #fff;
+  font-weight: 600;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.btn-primary:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 8px 28px rgba(236,72,153,0.35); }
+.btn-primary:active { transform: translateY(0) scale(0.99); }
+
+.btn-ghost {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: #f3eefc;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.btn-ghost:hover { background: rgba(255,255,255,0.12); transform: translateY(-1px); }
+
+.focus-ring:focus-visible {
+  outline: 2px solid #ec4899;
+  outline-offset: 2px;
+}
+
+/* Aurora mesh background blobs (see ThemedBackground.jsx) */
+.blob {
+  position: absolute;
+  width: 55vw;
+  height: 55vw;
+  max-width: 620px;
+  max-height: 620px;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.5;
+  will-change: transform;
+  animation: drift 26s ease-in-out infinite;
+}
+.blob-a { top: -12%; left: -12%; animation-duration: 24s; }
+.blob-b { top: 28%; right: -16%; animation-duration: 30s; animation-delay: -8s; }
+.blob-c { bottom: -18%; left: 22%; animation-duration: 22s; animation-delay: -4s; }
+
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(5%, 8%) scale(1.15); }
+  66% { transform: translate(-6%, -4%) scale(0.92); }
+}
+
+.floating-symbol {
+  position: absolute;
+  font-size: 1.8rem;
+  opacity: 0.3;
+  animation: symbolFloat 12s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes symbolFloat {
+  0%, 100% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0.22; }
+  50% { transform: translateY(-22px) translateX(10px) rotate(8deg); opacity: 0.42; }
+}
+
+/* Slide-in info panel */
+.info-panel {
+  transition: transform 320ms ease;
+}
+
+/* Aesthetic letter — aged paper look, no images needed */
+.letter-paper {
+  border-radius: 4px 46px 4px 46px / 46px 4px 46px 4px;
+  box-shadow: 0 25px 70px rgba(0,0,0,0.55), inset 0 0 50px rgba(0,0,0,0.06);
+}
+.letter-paper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image:
+    repeating-radial-gradient(circle at 15% 25%, rgba(0,0,0,0.035) 0, transparent 1.5px),
+    repeating-radial-gradient(circle at 75% 70%, rgba(0,0,0,0.03) 0, transparent 1.5px);
+  background-size: 7px 7px, 9px 9px;
+  pointer-events: none;
+}
+
+.letter-seal {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 54px;
+  height: 54px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.4), inset 0 -3px 6px rgba(0,0,0,0.25);
+  z-index: 2;
+}
+
+.polaroid {
+  width: 140px;
+  background: #fff;
+  padding: 8px 8px 20px 8px;
+  box-shadow: 0 12px 26px rgba(0,0,0,0.4);
+  transform: rotate(2.5deg);
+  border-radius: 2px;
+}
+.polaroid img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  display: block;
+  border-radius: 1px;
+}
+.polaroid-caption {
+  font-family: 'Caveat', cursive;
+  font-size: 0.85rem;
+  color: #444;
+  text-align: center;
+  margin-top: 6px;
+  line-height: 1.15;
+}
+
+.letter-textarea {
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  width: 100%;
+  color: inherit;
+}
+.letter-textarea::placeholder { color: rgba(0,0,0,0.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  .blob, .floating-symbol { animation: none !important; }
+  .animate-breathe, .animate-pulseGlow, .animate-float { animation: none !important; }
+}
