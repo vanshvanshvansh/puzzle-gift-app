@@ -4,6 +4,7 @@ import PuzzleBoard from '../components/PuzzleBoard.jsx'
 import ReferencePanel from '../components/ReferencePanel.jsx'
 import LetterFlow from '../components/LetterFlow.jsx'
 import ThemedBackground from '../components/ThemedBackground.jsx'
+import LiveWatchPanel from '../components/LiveWatchPanel.jsx'
 import { shuffleBoard, tryMove, isSolved, sliceImage } from '../lib/puzzle.js'
 import { getPuzzleByShareToken, getPuzzleByOwnerToken, updatePuzzleByToken } from '../lib/db.js'
 
@@ -21,6 +22,7 @@ export default function Play({ mode }) {
   const [elapsed, setElapsed] = useState(0)
   const [copyLabel, setCopyLabel] = useState('Share Link')
   const [confirmGiveUp, setConfirmGiveUp] = useState(false)
+  const [showWatch, setShowWatch] = useState(false)
 
   const timerRef = useRef(null)
   const broadcastTimeout = useRef(null)
@@ -226,6 +228,11 @@ export default function Play({ mode }) {
               {copyLabel}
             </button>
           )}
+          {mode === 'owner' && (
+            <button onClick={() => setShowWatch(true)} className="focus-ring btn-ghost px-6 py-3 rounded-2xl">
+              🔴 Live Watching
+            </button>
+          )}
         </div>
       )}
 
@@ -249,6 +256,14 @@ export default function Play({ mode }) {
               className="focus-ring btn-ghost px-5 py-2 rounded-xl text-sm text-white/70"
             >
               {copyLabel === 'Share Link' ? 'Share This Puzzle' : copyLabel}
+            </button>
+          )}
+          {mode === 'owner' && (
+            <button
+              onClick={() => setShowWatch(true)}
+              className="focus-ring btn-ghost px-5 py-2 rounded-xl text-sm text-white/70"
+            >
+              🔴 Live Watching
             </button>
           )}
         </div>
@@ -286,6 +301,9 @@ export default function Play({ mode }) {
             </div>
           </div>
         </div>
+      )}
+      {showWatch && mode === 'owner' && (
+        <LiveWatchPanel ownerToken={puzzle?.owner_token} onClose={() => setShowWatch(false)} />
       )}
     </div>
   )
