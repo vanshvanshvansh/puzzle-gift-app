@@ -8,22 +8,79 @@ import LiveWatchPanel from '../components/LiveWatchPanel.jsx'
 import { shuffleBoard, tryMove, isSolved, sliceImage } from '../lib/puzzle.js'
 import { getPuzzleByShareToken, getPuzzleByOwnerToken, updatePuzzleByToken } from '../lib/db.js'
 
+const EMPTY_SESSION = {
+  puzzle: null,
+  tiles: null,
+  board: null,
+  phase: 'loading',
+  countdown: 3,
+  elapsed: 0,
+  copyLabel: 'Share Link',
+}
+
 export default function Play({ mode }) {
   const navigate = useNavigate()
   const { shareToken, ownerToken } = useParams()
   const token = mode === 'owner' ? ownerToken : shareToken
   const tokenField = mode === 'owner' ? 'owner_token' : 'share_token'
 
-  const [puzzle, setPuzzle] = useState(null)
-  const [tiles, setTiles] = useState(null)
-  const [board, setBoard] = useState(null)
-  const [phase, setPhase] = useState('loading') // loading | idle | countdown | playing | solved | given_up | expired | notfound
-  const [countdown, setCountdown] = useState(3)
-  const [elapsed, setElapsed] = useState(0)
-  const [copyLabel, setCopyLabel] = useState('Share Link')
+  const [own, setOwn] = useState({ ...EMPTY_SESSION })
+  const [guest, setGuest] = useState(null)
+  const [viewingGuest, setViewingGuest] = useState(false)
+
   const [confirmGiveUp, setConfirmGiveUp] = useState(false)
   const [showWatch, setShowWatch] = useState(false)
-  const [pasteStatus, setPasteStatus] = useState('idle') // idle | checking | invalid
+  const [pasteStatus, setPasteStatus] = useState('idle')
+
+  const timerRef = useRef(null)
+  const broadcastTimeout = useRef(null)
+
+  const active = viewingGuest && guest ? guest : own
+  const setActive = viewingGuest && guest ? setGuest : setOwn
+  const activeToken = viewingGuest && guest ? guest.puzzle.share_token : token
+  const activeTokenField = viewingGuest && guest ? 'share_token' : tokenField
+  const isTracked = (viewingGuest && guest) || mode === 'recipient'
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const row = mode === 'owner' ? await getPuzzleByOwnerToken(token) : await getPuzzleByShareToken(token)
+        if (!row) {
+          setOwn((s) => ({ ...s, phase: 'notfound' }))
+          return
+        }
+        if (new Date(row.expires_at) < new Date()) {
+          setOwn((s) => ({ ...s, phase: 'expired' }))
+          return
+        }
+        const sliced = await sliceImage(row.image_url, row.grid_size)
+        const phase =
+          mode === 'owner'
+            ? 'idle'
+            : row.status === 'completed'
+            ? 'solved'
+            : row.status === 'given_up'
+            ? 'given_up'
+            : 'idle'
+        setOwn({ ...EMPTY_SESSION, puzzle: row, tiles: sliced, phase })
+      } catch (e) {
+        console.error(e)
+        setOwn((s) => ({ ...s, phase: 'notfound' }))
+      }
+    }
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  useEffect(() => {
+    if (active.phase === 'playing') {
+      timerRef.current = setInterval(() => {
+        setActive((s) => ({ ...s, elapsed: s.elapsed + 1 }))
+      }, 1000)
+      return () => clearInterval(timerRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active.phase, viewingGuest])
 
   async function handlePasteLink() {
     setPasteStatus('checking')
@@ -42,7 +99,11 @@ export default function Play({ mode }) {
         setTimeout(() => setPasteStatus('idle'), 1800)
         return
       }
-      navigate(`/play/${pastedToken}`)
+      const sliced = await sliceImage(row.image_url, row.grid_size)
+      const phase = row.status === 'completed' ? 'solved' : row.status === 'given_up' ? 'given_up' : 'idle'
+      setGuest({ ...EMPTY_SESSION, puzzle: row, tiles: sliced, phase })
+      setViewingGuest(true)
+      setPasteStatus('idle')
     } catch (e) {
       console.error(e)
       setPasteStatus('invalid')
@@ -50,62 +111,24 @@ export default function Play({ mode }) {
     }
   }
 
-  const timerRef = useRef(null)
-  const broadcastTimeout = useRef(null)
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const row = mode === 'owner' ? await getPuzzleByOwnerToken(token) : await getPuzzleByShareToken(token)
-        if (!row) {
-          setPhase('notfound')
-          return
-        }
-        if (new Date(row.expires_at) < new Date()) {
-          setPhase('expired')
-          return
-        }
-        setPuzzle(row)
-        const sliced = await sliceImage(row.image_url, row.grid_size)
-        setTiles(sliced)
-        if (mode === 'owner') {
-          setPhase('idle')
-        } else {
-          setPhase(row.status === 'completed' ? 'solved' : row.status === 'given_up' ? 'given_up' : 'idle')
-        }
-      } catch (e) {
-        console.error(e)
-        setPhase('notfound')
-      }
-    }
-    load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
-
-  useEffect(() => {
-    if (phase === 'playing') {
-      timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000)
-      return () => clearInterval(timerRef.current)
-    }
-  }, [phase])
-
-  const isTracked = mode === 'recipient'
+  function backToMyPuzzle() {
+    setViewingGuest(false)
+    setGuest(null)
+  }
 
   async function handleStart() {
-    setPhase('countdown')
+    setActive((s) => ({ ...s, phase: 'countdown' }))
     let c = 3
-    setCountdown(c)
+    setActive((s) => ({ ...s, countdown: c }))
     const iv = setInterval(() => {
       c -= 1
-      setCountdown(c)
+      setActive((s) => ({ ...s, countdown: c }))
       if (c <= 0) {
         clearInterval(iv)
-        const fresh = shuffleBoard(puzzle.grid_size)
-        setBoard(fresh)
-        setElapsed(0)
-        setPhase('playing')
+        const fresh = shuffleBoard(active.puzzle.grid_size)
+        setActive((s) => ({ ...s, board: fresh, elapsed: 0, phase: 'playing' }))
         if (isTracked) {
-          updatePuzzleByToken(tokenField, token, {
+          updatePuzzleByToken(activeTokenField, activeToken, {
             status: 'in_progress',
             started_at: new Date().toISOString(),
             current_piece_state: fresh,
@@ -116,15 +139,15 @@ export default function Play({ mode }) {
   }
 
   function handlePieceClick(index) {
-    if (phase !== 'playing') return
-    const next = tryMove(board, index, puzzle.grid_size)
-    if (next === board) return
-    setBoard(next)
+    if (active.phase !== 'playing') return
+    const next = tryMove(active.board, index, active.puzzle.grid_size)
+    if (next === active.board) return
+    setActive((s) => ({ ...s, board: next }))
 
     if (isTracked) {
       clearTimeout(broadcastTimeout.current)
       broadcastTimeout.current = setTimeout(() => {
-        updatePuzzleByToken(tokenField, token, { current_piece_state: next }).catch(console.error)
+        updatePuzzleByToken(activeTokenField, activeToken, { current_piece_state: next }).catch(console.error)
       }, 300)
     }
 
@@ -135,17 +158,17 @@ export default function Play({ mode }) {
 
   async function finishSolved(finalBoard) {
     clearInterval(timerRef.current)
-    setPhase('solved')
+    setActive((s) => ({ ...s, phase: 'solved' }))
     if (!isTracked) return
     const payload = {
       status: 'completed',
       completed_at: new Date().toISOString(),
-      score_seconds: elapsed,
+      score_seconds: active.elapsed,
       current_piece_state: finalBoard,
     }
     try {
-      const updated = await updatePuzzleByToken(tokenField, token, payload)
-      setPuzzle(updated)
+      const updated = await updatePuzzleByToken(activeTokenField, activeToken, payload)
+      setActive((s) => ({ ...s, puzzle: updated }))
     } catch (e) {
       console.error(e)
     }
@@ -155,37 +178,40 @@ export default function Play({ mode }) {
     setConfirmGiveUp(false)
     if (isTracked) {
       try {
-        await updatePuzzleByToken(tokenField, token, { status: 'given_up' })
+        await updatePuzzleByToken(activeTokenField, activeToken, { status: 'given_up' })
       } catch (e) {
         console.error(e)
       }
     }
-    setPhase('given_up')
-    setTimeout(() => navigate(mode === 'owner' ? '/dashboard' : '/'), 1200)
+    setActive((s) => ({ ...s, phase: 'given_up' }))
+    setTimeout(() => {
+      if (viewingGuest) {
+        backToMyPuzzle()
+      } else {
+        navigate(mode === 'owner' ? '/dashboard' : '/')
+      }
+    }, 1200)
   }
 
   async function handleShare() {
-    const url = `${window.location.origin}/play/${puzzle.share_token}`
+    const url = `${window.location.origin}/play/${own.puzzle.share_token}`
     try {
       await navigator.clipboard.writeText(url)
-      setCopyLabel('Link copied!')
-      setTimeout(() => setCopyLabel('Share Link'), 2000)
+      setOwn((s) => ({ ...s, copyLabel: 'Link copied!' }))
+      setTimeout(() => setOwn((s) => ({ ...s, copyLabel: 'Share Link' })), 2000)
     } catch {
       window.prompt('Copy this link:', url)
     }
   }
 
   async function handleSendLetter(text) {
-    const canvas = document.createElement('canvas')
-    canvas.width = 512
-    canvas.height = 512
-    const letter_image_url = puzzle.image_url
-    await updatePuzzleByToken(tokenField, token, { letter_text: text, letter_image_url })
+    const letter_image_url = active.puzzle.image_url
+    await updatePuzzleByToken(activeTokenField, activeToken, { letter_text: text, letter_image_url })
   }
 
-  if (phase === 'loading') return <CenterMsg>Loading your puzzle…</CenterMsg>
-  if (phase === 'notfound') return <CenterMsg>This puzzle link doesn't exist.</CenterMsg>
-  if (phase === 'expired')
+  if (own.phase === 'loading') return <CenterMsg>Loading your puzzle…</CenterMsg>
+  if (own.phase === 'notfound') return <CenterMsg>This puzzle link doesn't exist.</CenterMsg>
+  if (own.phase === 'expired')
     return (
       <CenterMsg>
         This puzzle has expired.
@@ -196,7 +222,7 @@ export default function Play({ mode }) {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-10 gap-6 relative">
-      <ThemedBackground theme={puzzle?.theme_category} />
+      <ThemedBackground theme={active.puzzle?.theme_category} />
       <button
         onClick={() => navigate(mode === 'owner' ? '/dashboard' : '/')}
         className="focus-ring btn-ghost absolute top-6 left-6 px-4 py-2 rounded-xl text-sm"
@@ -204,50 +230,57 @@ export default function Play({ mode }) {
         ← Back
       </button>
 
-      {puzzle && (
+      {active.puzzle && (
         <h1 className="font-display text-xl md:text-2xl text-center text-pink-200">
-          {puzzle.challenge_label}
+          {active.puzzle.challenge_label}
         </h1>
       )}
+      {mode === 'owner' && viewingGuest && (
+        <p className="text-xs text-white/40 -mt-4">Playing a puzzle you pasted in — your own puzzle is safe underneath</p>
+      )}
 
-      {(phase === 'playing' || phase === 'idle' || phase === 'countdown') && puzzle && (
-        <div className="text-sm text-white/60">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</div>
+      {(active.phase === 'playing' || active.phase === 'idle' || active.phase === 'countdown') && active.puzzle && (
+        <div className="text-sm text-white/60">
+          {Math.floor(active.elapsed / 60)}:{String(active.elapsed % 60).padStart(2, '0')}
+        </div>
       )}
 
       <div className="flex flex-col md:flex-row items-center gap-6">
-        {board && phase === 'playing' && puzzle && (
-          <ReferencePanel imageUrl={puzzle.image_url} gridSize={puzzle.grid_size} />
+        {active.board && active.phase === 'playing' && active.puzzle && (
+          <ReferencePanel imageUrl={active.puzzle.image_url} gridSize={active.puzzle.grid_size} />
         )}
 
-        <div className={phase === 'idle' || phase === 'countdown' ? 'blur-md scale-95 opacity-70' : ''}>
-          {puzzle && (
+        <div className={active.phase === 'idle' || active.phase === 'countdown' ? 'blur-md scale-95 opacity-70' : ''}>
+          {active.puzzle && (
             <PuzzleBoard
-              board={board || Array.from({ length: puzzle.grid_size * puzzle.grid_size }, (_, i) => i)}
-              tiles={tiles || []}
-              gridSize={puzzle.grid_size}
-              interactive={phase === 'playing'}
+              board={active.board || Array.from({ length: active.puzzle.grid_size * active.puzzle.grid_size }, (_, i) => i)}
+              tiles={active.tiles || []}
+              gridSize={active.puzzle.grid_size}
+              interactive={active.phase === 'playing'}
               onPieceClick={handlePieceClick}
             />
           )}
         </div>
       </div>
 
-      {phase === 'countdown' && (
-        <div className="font-display text-6xl">{countdown > 0 ? countdown : 'Go!'}</div>
+      {active.phase === 'countdown' && (
+        <div className="font-display text-6xl">{active.countdown > 0 ? active.countdown : 'Go!'}</div>
       )}
 
-      {phase === 'idle' && (
+      {active.phase === 'idle' && (
         <div className="flex flex-col items-center gap-3">
           <button onClick={handleStart} className="focus-ring btn-primary px-6 py-3 rounded-2xl">
             Start Game
           </button>
           {mode === 'owner' && (
             <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-              <button
-                onClick={handleShare}
-                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
-              >
-                {copyLabel}
+              {viewingGuest && (
+                <button onClick={backToMyPuzzle} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
+                  ↩ Back to My Puzzle
+                </button>
+              )}
+              <button onClick={handleShare} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
+                {own.copyLabel}
               </button>
               <button
                 onClick={() => setShowWatch(true)}
@@ -255,10 +288,7 @@ export default function Play({ mode }) {
               >
                 🔴 Live Watching
               </button>
-              <button
-                onClick={handlePasteLink}
-                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
-              >
+              <button onClick={handlePasteLink} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
                 {pasteStatus === 'invalid' ? 'Not a valid link' : pasteStatus === 'checking' ? 'Checking…' : '📋 Paste Link'}
               </button>
             </div>
@@ -266,7 +296,7 @@ export default function Play({ mode }) {
         </div>
       )}
 
-      {phase === 'playing' && (
+      {active.phase === 'playing' && (
         <div className="flex flex-col items-center gap-3">
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
@@ -284,11 +314,19 @@ export default function Play({ mode }) {
           </div>
           {mode === 'owner' && (
             <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              {viewingGuest && (
+                <button
+                  onClick={backToMyPuzzle}
+                  className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
+                >
+                  ↩ Back to My Puzzle
+                </button>
+              )}
               <button
                 onClick={handleShare}
                 className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
               >
-                {copyLabel === 'Share Link' ? 'Share This Puzzle' : copyLabel}
+                {own.copyLabel === 'Share Link' ? 'Share This Puzzle' : own.copyLabel}
               </button>
               <button
                 onClick={() => setShowWatch(true)}
@@ -307,15 +345,21 @@ export default function Play({ mode }) {
         </div>
       )}
 
-      {phase === 'solved' && puzzle && (
+      {active.phase === 'solved' && active.puzzle && (
         <div className="flex flex-col items-center gap-4">
           <p className="font-display text-2xl text-pink-200">
-            Completed in {Math.floor((puzzle.score_seconds ?? elapsed) / 60)}m {(puzzle.score_seconds ?? elapsed) % 60}s 🎉
+            Completed in {Math.floor((active.puzzle.score_seconds ?? active.elapsed) / 60)}m{' '}
+            {(active.puzzle.score_seconds ?? active.elapsed) % 60}s 🎉
           </p>
-          {mode === 'recipient' && !puzzle.letter_text && (
-            <LetterFlow puzzle={puzzle} onSend={handleSendLetter} />
+          {(mode === 'recipient' || (mode === 'owner' && viewingGuest)) && !active.puzzle.letter_text && (
+            <LetterFlow puzzle={active.puzzle} onSend={handleSendLetter} />
           )}
-          {mode === 'owner' && (
+          {mode === 'owner' && viewingGuest && (
+            <button onClick={backToMyPuzzle} className="focus-ring btn-ghost px-5 py-2.5 rounded-xl text-sm">
+              ↩ Back to My Puzzle
+            </button>
+          )}
+          {mode === 'owner' && !viewingGuest && (
             <button onClick={() => navigate('/dashboard')} className="focus-ring btn-ghost px-5 py-2.5 rounded-xl text-sm">
               Back to Dashboard
             </button>
@@ -323,7 +367,7 @@ export default function Play({ mode }) {
         </div>
       )}
 
-      {phase === 'given_up' && <p className="text-white/60">Alright — heading back…</p>}
+      {active.phase === 'given_up' && <p className="text-white/60">Alright — heading back…</p>}
 
       {confirmGiveUp && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
@@ -341,7 +385,7 @@ export default function Play({ mode }) {
         </div>
       )}
       {showWatch && mode === 'owner' && (
-        <LiveWatchPanel ownerToken={puzzle?.owner_token} onClose={() => setShowWatch(false)} />
+        <LiveWatchPanel ownerToken={own.puzzle?.owner_token} onClose={() => setShowWatch(false)} />
       )}
     </div>
   )
