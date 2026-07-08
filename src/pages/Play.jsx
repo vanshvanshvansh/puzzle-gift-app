@@ -77,6 +77,7 @@ export default function Play({ mode }) {
 
   const timerRef = useRef(null)
   const broadcastTimeout = useRef(null)
+  const lastBroadcastRef = useRef(0)
 
   const active = viewingGuest && guest ? guest : own
   const setActive = viewingGuest && guest ? setGuest : setOwn
@@ -221,14 +222,30 @@ export default function Play({ mode }) {
     setActive((s) => ({ ...s, board: next }))
 
     if (isTracked) {
-      clearTimeout(broadcastTimeout.current)
-      broadcastTimeout.current = setTimeout(() => {
-        updatePuzzleByToken(activeTokenField, activeToken, { current_piece_state: next }).catch(console.error)
-      }, 300)
+      broadcastMove(next)
     }
 
     if (isSolved(next)) {
       finishSolved(next)
+    }
+  }
+
+  // Leading + trailing throttle: the first move in a burst goes out
+  // immediately, then at most one update every 250ms while moves keep
+  // coming, and a final update once movement stops — so the live watcher
+  // sees motion as it happens instead of only after a pause.
+  function broadcastMove(boardState) {
+    const now = Date.now()
+    const last = lastBroadcastRef.current
+    const send = (b) => {
+      lastBroadcastRef.current = Date.now()
+      updatePuzzleByToken(activeTokenField, activeToken, { current_piece_state: b }).catch(console.error)
+    }
+    clearTimeout(broadcastTimeout.current)
+    if (now - last >= 250) {
+      send(boardState)
+    } else {
+      broadcastTimeout.current = setTimeout(() => send(boardState), 250 - (now - last))
     }
   }
 
