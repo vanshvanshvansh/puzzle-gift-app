@@ -23,6 +23,32 @@ export default function Play({ mode }) {
   const [copyLabel, setCopyLabel] = useState('Share Link')
   const [confirmGiveUp, setConfirmGiveUp] = useState(false)
   const [showWatch, setShowWatch] = useState(false)
+  const [pasteStatus, setPasteStatus] = useState('idle') // idle | checking | invalid
+
+  async function handlePasteLink() {
+    setPasteStatus('checking')
+    try {
+      const text = await navigator.clipboard.readText()
+      const match = text.match(/\/play\/([A-Za-z0-9_-]+)/)
+      if (!match) {
+        setPasteStatus('invalid')
+        setTimeout(() => setPasteStatus('idle'), 1800)
+        return
+      }
+      const pastedToken = match[1]
+      const row = await getPuzzleByShareToken(pastedToken)
+      if (!row || new Date(row.expires_at) < new Date()) {
+        setPasteStatus('invalid')
+        setTimeout(() => setPasteStatus('idle'), 1800)
+        return
+      }
+      navigate(`/play/${pastedToken}`)
+    } catch (e) {
+      console.error(e)
+      setPasteStatus('invalid')
+      setTimeout(() => setPasteStatus('idle'), 1800)
+    }
+  }
 
   const timerRef = useRef(null)
   const broadcastTimeout = useRef(null)
@@ -43,9 +69,6 @@ export default function Play({ mode }) {
         const sliced = await sliceImage(row.image_url, row.grid_size)
         setTiles(sliced)
         if (mode === 'owner') {
-          // The owner's own playthrough is a private, independent session —
-          // it should never be locked out just because the recipient (whose
-          // progress lives in the same DB row) has already finished or given up.
           setPhase('idle')
         } else {
           setPhase(row.status === 'completed' ? 'solved' : row.status === 'given_up' ? 'given_up' : 'idle')
@@ -66,10 +89,6 @@ export default function Play({ mode }) {
     }
   }, [phase])
 
-  // Only the RECIPIENT's session is ever broadcast to the DB / Watch view.
-  // The owner playing their own copy is a private local session — it must
-  // never overwrite the shared current_piece_state, or Watch would show
-  // the wrong game and moves would look "invisible".
   const isTracked = mode === 'recipient'
 
   async function handleStart() {
@@ -160,7 +179,6 @@ export default function Play({ mode }) {
     const canvas = document.createElement('canvas')
     canvas.width = 512
     canvas.height = 512
-    // Best-effort snapshot: reuse the reference image itself as the "completed image".
     const letter_image_url = puzzle.image_url
     await updatePuzzleByToken(tokenField, token, { letter_text: text, letter_image_url })
   }
@@ -219,52 +237,72 @@ export default function Play({ mode }) {
       )}
 
       {phase === 'idle' && (
-        <div className="flex gap-3">
+        <div className="flex flex-col items-center gap-3">
           <button onClick={handleStart} className="focus-ring btn-primary px-6 py-3 rounded-2xl">
             Start Game
           </button>
           {mode === 'owner' && (
-            <button onClick={handleShare} className="focus-ring btn-ghost px-6 py-3 rounded-2xl">
-              {copyLabel}
-            </button>
-          )}
-          {mode === 'owner' && (
-            <button onClick={() => setShowWatch(true)} className="focus-ring btn-ghost px-6 py-3 rounded-2xl">
-              🔴 Live Watching
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              <button
+                onClick={handleShare}
+                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
+              >
+                {copyLabel}
+              </button>
+              <button
+                onClick={() => setShowWatch(true)}
+                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
+              >
+                🔴 Live Watching
+              </button>
+              <button
+                onClick={handlePasteLink}
+                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
+              >
+                {pasteStatus === 'invalid' ? 'Not a valid link' : pasteStatus === 'checking' ? 'Checking…' : '📋 Paste Link'}
+              </button>
+            </div>
           )}
         </div>
       )}
 
       {phase === 'playing' && (
-        <div className="flex gap-3 flex-wrap justify-center">
-          <button
-            onClick={handleStart}
-            className="focus-ring btn-ghost px-5 py-2 rounded-xl text-sm text-white/70"
-          >
-            Restart (new shuffle)
-          </button>
-          <button
-            onClick={() => setConfirmGiveUp(true)}
-            className="focus-ring btn-ghost px-5 py-2 rounded-xl text-sm text-white/70"
-          >
-            Give Up
-          </button>
-          {mode === 'owner' && (
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <button
-              onClick={handleShare}
-              className="focus-ring btn-ghost px-5 py-2 rounded-xl text-sm text-white/70"
+              onClick={handleStart}
+              className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
             >
-              {copyLabel === 'Share Link' ? 'Share This Puzzle' : copyLabel}
+              Restart (new shuffle)
             </button>
-          )}
-          {mode === 'owner' && (
             <button
-              onClick={() => setShowWatch(true)}
-              className="focus-ring btn-ghost px-5 py-2 rounded-xl text-sm text-white/70"
+              onClick={() => setConfirmGiveUp(true)}
+              className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
             >
-              🔴 Live Watching
+              Give Up
             </button>
+          </div>
+          {mode === 'owner' && (
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              <button
+                onClick={handleShare}
+                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
+              >
+                {copyLabel === 'Share Link' ? 'Share This Puzzle' : copyLabel}
+              </button>
+              <button
+                onClick={() => setShowWatch(true)}
+                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
+              >
+                🔴 Live Watching
+              </button>
+              <button
+                onClick={handlePasteLink}
+                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
+              >
+                {pasteStatus === 'invalid' ? 'Not a valid link' : pasteStatus === 'checking' ? 'Checking…' : '📋 Paste Link'}
+              </button>
+            </div>
           )}
         </div>
       )}
