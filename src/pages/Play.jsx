@@ -18,6 +18,19 @@ const EMPTY_SESSION = {
   copyLabel: 'Share Link',
 }
 
+async function sliceImageWithRetry(imageUrl, gridSize, attempts = 3) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await sliceImage(imageUrl, gridSize)
+    } catch (e) {
+      lastErr = e
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
+  throw lastErr
+}
+
 export default function Play({ mode }) {
   const navigate = useNavigate()
   const { shareToken, ownerToken } = useParams()
@@ -53,7 +66,7 @@ export default function Play({ mode }) {
           setOwn((s) => ({ ...s, phase: 'expired' }))
           return
         }
-        const sliced = await sliceImage(row.image_url, row.grid_size)
+        const sliced = await sliceImageWithRetry(row.image_url, row.grid_size)
         const phase =
           mode === 'owner'
             ? 'idle'
@@ -84,36 +97,52 @@ export default function Play({ mode }) {
 
   async function handlePasteLink() {
     setPasteStatus('checking')
+
+    let text
     try {
-      const text = await navigator.clipboard.readText()
-      const match = text.match(/\/play\/([A-Za-z0-9_-]+)/)
-      if (!match) {
-        setPasteStatus('invalid')
-        setTimeout(() => setPasteStatus('idle'), 1800)
-        return
-      }
-      const pastedToken = match[1]
-      const row = await getPuzzleByShareToken(pastedToken)
-      if (!row || new Date(row.expires_at) < new Date()) {
-        setPasteStatus('invalid')
-        setTimeout(() => setPasteStatus('idle'), 1800)
-        return
-      }
-      const sliced = await sliceImage(row.image_url, row.grid_size)
+      text = await navigator.clipboard.readText()
+    } catch (e) {
+      console.error(e)
+      setPasteStatus('network')
+      setTimeout(() => setPasteStatus('idle'), 2500)
+      return
+    }
+
+    const match = text.match(/\/play\/([A-Za-z0-9_-]+)/)
+    if (!match) {
+      setPasteStatus('invalid')
+      setTimeout(() => setPasteStatus('idle'), 2500)
+      return
+    }
+
+    const pastedToken = match[1]
+    let row
+    try {
+      row = await getPuzzleByShareToken(pastedToken)
+    } catch (e) {
+      console.error(e)
+      setPasteStatus('network')
+      setTimeout(() => setPasteStatus('idle'), 2500)
+      return
+    }
+
+    if (!row || new Date(row.expires_at) < new Date()) {
+      setPasteStatus('invalid')
+      setTimeout(() => setPasteStatus('idle'), 2500)
+      return
+    }
+
+    try {
+      const sliced = await sliceImageWithRetry(row.image_url, row.grid_size)
       const phase = row.status === 'completed' ? 'solved' : row.status === 'given_up' ? 'given_up' : 'idle'
       setGuest({ ...EMPTY_SESSION, puzzle: row, tiles: sliced, phase })
       setViewingGuest(true)
       setPasteStatus('idle')
     } catch (e) {
       console.error(e)
-      setPasteStatus('invalid')
-      setTimeout(() => setPasteStatus('idle'), 1800)
+      setPasteStatus('network')
+      setTimeout(() => setPasteStatus('idle'), 2500)
     }
-  }
-
-  function backToMyPuzzle() {
-    setViewingGuest(false)
-    setGuest(null)
   }
 
   async function handleStart() {
@@ -186,7 +215,8 @@ export default function Play({ mode }) {
     setActive((s) => ({ ...s, phase: 'given_up' }))
     setTimeout(() => {
       if (viewingGuest) {
-        backToMyPuzzle()
+        setViewingGuest(false)
+        setGuest(null)
       } else {
         navigate(mode === 'owner' ? '/dashboard' : '/')
       }
@@ -220,6 +250,15 @@ export default function Play({ mode }) {
       </CenterMsg>
     )
 
+  const pasteLabel =
+    pasteStatus === 'invalid'
+      ? 'Not a valid link'
+      : pasteStatus === 'network'
+      ? 'Slow connection — try again'
+      : pasteStatus === 'checking'
+      ? 'Checking…'
+      : '📋 Paste Link'
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-10 gap-6 relative">
       <ThemedBackground theme={active.puzzle?.theme_category} />
@@ -236,7 +275,7 @@ export default function Play({ mode }) {
         </h1>
       )}
       {mode === 'owner' && viewingGuest && (
-        <p className="text-xs text-white/40 -mt-4">Playing a puzzle you pasted in — your own puzzle is safe underneath</p>
+        <p className="text-xs text-white/40 -mt-4">Playing a puzzle you pasted in</p>
       )}
 
       {(active.phase === 'playing' || active.phase === 'idle' || active.phase === 'countdown') && active.puzzle && (
@@ -268,80 +307,25 @@ export default function Play({ mode }) {
       )}
 
       {active.phase === 'idle' && (
-        <div className="flex flex-col items-center gap-3">
-          <button onClick={handleStart} className="focus-ring btn-primary px-6 py-3 rounded-2xl">
-            Start Game
-          </button>
-          {mode === 'owner' && (
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-              {viewingGuest && (
-                <button onClick={backToMyPuzzle} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
-                  ↩ Back to My Puzzle
-                </button>
-              )}
-              <button onClick={handleShare} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
-                {own.copyLabel}
-              </button>
-              <button
-                onClick={() => setShowWatch(true)}
-                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
-              >
-                🔴 Live Watching
-              </button>
-              <button onClick={handlePasteLink} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
-                {pasteStatus === 'invalid' ? 'Not a valid link' : pasteStatus === 'checking' ? 'Checking…' : '📋 Paste Link'}
-              </button>
-            </div>
-          )}
-        </div>
+        <button onClick={handleStart} className="focus-ring btn-primary px-6 py-3 rounded-2xl">
+          Start Game
+        </button>
       )}
 
       {active.phase === 'playing' && (
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <button
-              onClick={handleStart}
-              className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
-            >
-              Restart (new shuffle)
-            </button>
-            <button
-              onClick={() => setConfirmGiveUp(true)}
-              className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
-            >
-              Give Up
-            </button>
-          </div>
-          {mode === 'owner' && (
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-              {viewingGuest && (
-                <button
-                  onClick={backToMyPuzzle}
-                  className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
-                >
-                  ↩ Back to My Puzzle
-                </button>
-              )}
-              <button
-                onClick={handleShare}
-                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
-              >
-                {own.copyLabel === 'Share Link' ? 'Share This Puzzle' : own.copyLabel}
-              </button>
-              <button
-                onClick={() => setShowWatch(true)}
-                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
-              >
-                🔴 Live Watching
-              </button>
-              <button
-                onClick={handlePasteLink}
-                className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
-              >
-                {pasteStatus === 'invalid' ? 'Not a valid link' : pasteStatus === 'checking' ? 'Checking…' : '📋 Paste Link'}
-              </button>
-            </div>
-          )}
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            onClick={handleStart}
+            className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
+          >
+            Restart (new shuffle)
+          </button>
+          <button
+            onClick={() => setConfirmGiveUp(true)}
+            className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm text-white/70"
+          >
+            Give Up
+          </button>
         </div>
       )}
 
@@ -354,11 +338,6 @@ export default function Play({ mode }) {
           {(mode === 'recipient' || (mode === 'owner' && viewingGuest)) && !active.puzzle.letter_text && (
             <LetterFlow puzzle={active.puzzle} onSend={handleSendLetter} />
           )}
-          {mode === 'owner' && viewingGuest && (
-            <button onClick={backToMyPuzzle} className="focus-ring btn-ghost px-5 py-2.5 rounded-xl text-sm">
-              ↩ Back to My Puzzle
-            </button>
-          )}
           {mode === 'owner' && !viewingGuest && (
             <button onClick={() => navigate('/dashboard')} className="focus-ring btn-ghost px-5 py-2.5 rounded-xl text-sm">
               Back to Dashboard
@@ -368,6 +347,28 @@ export default function Play({ mode }) {
       )}
 
       {active.phase === 'given_up' && <p className="text-white/60">Alright — heading back…</p>}
+
+      {mode === 'owner' && (
+        <div className="flex flex-col items-center gap-1.5 pt-2 border-t border-white/10 w-full max-w-sm">
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+            <button onClick={handleShare} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
+              {own.copyLabel}
+            </button>
+            <button
+              onClick={() => setShowWatch(true)}
+              className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
+            >
+              🔴 Live Watching
+            </button>
+            <button onClick={handlePasteLink} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
+              {pasteLabel}
+            </button>
+          </div>
+          <p className="text-[11px] text-white/35 text-center px-4">
+            If a paste or share doesn't work the first time, please try a couple more times — it's usually just a slow connection.
+          </p>
+        </div>
+      )}
 
       {confirmGiveUp && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
