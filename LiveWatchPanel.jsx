@@ -16,6 +16,7 @@ export default function LiveWatchPanel({ ownerToken, onClose }) {
 
   useEffect(() => {
     let unsubscribe
+    let pollId
     let cancelled = false
     async function load() {
       const row = await getPuzzleByOwnerToken(ownerToken)
@@ -25,15 +26,31 @@ export default function LiveWatchPanel({ ownerToken, onClose }) {
       const sliced = await sliceImage(row.image_url, row.grid_size)
       if (cancelled) return
       setTiles(sliced)
+
+      // Primary: instant updates via Supabase Realtime (when it's working).
       unsubscribe = subscribeToPuzzle(ownerToken, (updated) => {
         setPuzzle(updated)
         setBoard(updated.current_piece_state)
       })
+
+      // Backup: poll every 1.5s regardless, so watching stays live even if
+      // Realtime is unavailable, blocked by a network, or drops silently.
+      pollId = setInterval(async () => {
+        try {
+          const fresh = await getPuzzleByOwnerToken(ownerToken)
+          if (!fresh || cancelled) return
+          setPuzzle(fresh)
+          setBoard(fresh.current_piece_state || null)
+        } catch {
+          // transient — next poll will retry
+        }
+      }, 1500)
     }
     load()
     return () => {
       cancelled = true
       unsubscribe && unsubscribe()
+      pollId && clearInterval(pollId)
     }
   }, [ownerToken])
 
