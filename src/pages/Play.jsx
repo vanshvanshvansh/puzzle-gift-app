@@ -31,6 +31,34 @@ async function sliceImageWithRetry(imageUrl, gridSize, attempts = 3) {
   throw lastErr
 }
 
+// Retries a flaky network call a few times before giving up, so a slow
+// connection doesn't immediately show as an error to the person.
+async function withRetry(fn, attempts = 3, delayMs = 700) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      lastErr = e
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs))
+    }
+  }
+  throw lastErr
+}
+
+// Pulls a share/owner token out of a pasted URL, or accepts a bare token
+// (in case someone pastes just the code instead of the full link).
+function extractToken(raw) {
+  const cleaned = raw.trim()
+  const playMatch = cleaned.match(/\/play\/([A-Za-z0-9_-]{10,})/)
+  if (playMatch) return { type: 'share', token: playMatch[1] }
+  const ownMatch = cleaned.match(/\/own\/([A-Za-z0-9_-]{10,})/)
+  if (ownMatch) return { type: 'owner', token: ownMatch[1] }
+  const bareMatch = cleaned.match(/^[A-Za-z0-9_-]{10,}$/)
+  if (bareMatch) return { type: 'unknown', token: cleaned }
+  return null
+}
+
 export default function Play({ mode }) {
   const navigate = useNavigate()
   const { shareToken, ownerToken } = useParams()
@@ -44,6 +72,8 @@ export default function Play({ mode }) {
   const [confirmGiveUp, setConfirmGiveUp] = useState(false)
   const [showWatch, setShowWatch] = useState(false)
   const [pasteStatus, setPasteStatus] = useState('idle')
+  const [pasteBoxOpen, setPasteBoxOpen] = useState(false)
+  const [pasteInputValue, setPasteInputValue] = useState('')
 
   const timerRef = useRef(null)
   const broadcastTimeout = useRef(null)
@@ -95,44 +125,56 @@ export default function Play({ mode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.phase, viewingGuest])
 
+  // First try the clipboard API directly (fast path, works on most desktop
+  // and Chrome-based browsers). If that's blocked (common on iOS Safari and
+  // several Android browsers), fall open a manual paste box instead of
+  // just failing — the person can long-press-paste there, which always works.
   async function handlePasteLink() {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text && text.trim()) {
+        setPasteInputValue(text.trim())
+        await submitPastedLink(text)
+        return
+      }
+    } catch {
+      // Clipboard API blocked/unsupported on this device — fall through to manual box.
+    }
+    setPasteBoxOpen(true)
+    setPasteStatus('idle')
+  }
+
+  async function submitPastedLink(rawText) {
     setPasteStatus('checking')
 
-    let text
-    try {
-      text = await navigator.clipboard.readText()
-    } catch (e) {
-      console.error(e)
-      setPasteStatus('network')
-      setTimeout(() => setPasteStatus('idle'), 2500)
-      return
-    }
-
-    const cleaned = text.trim()
-    const playMatch = cleaned.match(/\/play\/([A-Za-z0-9_-]+)/)
-    const ownMatch = cleaned.match(/\/own\/([A-Za-z0-9_-]+)/)
-
-    if (!playMatch && !ownMatch) {
+    const parsed = extractToken(rawText || pasteInputValue)
+    if (!parsed) {
       setPasteStatus('invalid')
-      setTimeout(() => setPasteStatus('idle'), 2500)
       return
     }
 
     let row
     try {
-      row = playMatch
-        ? await getPuzzleByShareToken(playMatch[1])
-        : await getPuzzleByOwnerToken(ownMatch[1])
+      row = await withRetry(async () => {
+        if (parsed.type === 'owner') return await getPuzzleByOwnerToken(parsed.token)
+        if (parsed.type === 'share') return await getPuzzleByShareToken(parsed.token)
+        // Unknown/bare token — try share first, then owner.
+        const bySh = await getPuzzleByShareToken(parsed.token)
+        if (bySh) return bySh
+        return await getPuzzleByOwnerToken(parsed.token)
+      })
     } catch (e) {
       console.error(e)
       setPasteStatus('network')
-      setTimeout(() => setPasteStatus('idle'), 2500)
       return
     }
 
-    if (!row || new Date(row.expires_at) < new Date()) {
+    if (!row) {
       setPasteStatus('invalid')
-      setTimeout(() => setPasteStatus('idle'), 2500)
+      return
+    }
+    if (new Date(row.expires_at) < new Date()) {
+      setPasteStatus('invalid')
       return
     }
 
@@ -142,10 +184,11 @@ export default function Play({ mode }) {
       setGuest({ ...EMPTY_SESSION, puzzle: row, tiles: sliced, phase })
       setViewingGuest(true)
       setPasteStatus('idle')
+      setPasteBoxOpen(false)
+      setPasteInputValue('')
     } catch (e) {
       console.error(e)
       setPasteStatus('network')
-      setTimeout(() => setPasteStatus('idle'), 2500)
     }
   }
 
@@ -254,14 +297,7 @@ export default function Play({ mode }) {
       </CenterMsg>
     )
 
-  const pasteLabel =
-    pasteStatus === 'invalid'
-      ? 'Not a valid link'
-      : pasteStatus === 'network'
-      ? 'Slow connection — try again'
-      : pasteStatus === 'checking'
-      ? 'Checking…'
-      : '📋 Paste Link'
+  const pasteLabel = pasteStatus === 'checking' ? 'Checking…' : '📋 Paste Link'
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-10 gap-6 relative">
@@ -364,10 +400,51 @@ export default function Play({ mode }) {
             >
               🔴 Live Watching
             </button>
-            <button onClick={handlePasteLink} className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm">
+            <button
+              onClick={() => (pasteBoxOpen ? setPasteBoxOpen(false) : handlePasteLink())}
+              className="focus-ring btn-ghost w-[150px] px-4 py-2 rounded-xl text-sm"
+            >
               {pasteLabel}
             </button>
           </div>
+
+          {pasteBoxOpen && (
+            <div className="w-full flex flex-col items-center gap-2 pt-1">
+              <input
+                type="text"
+                inputMode="url"
+                autoFocus
+                value={pasteInputValue}
+                onChange={(e) => {
+                  setPasteInputValue(e.target.value)
+                  if (pasteStatus !== 'idle' && pasteStatus !== 'checking') setPasteStatus('idle')
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && pasteInputValue.trim()) submitPastedLink(pasteInputValue)
+                }}
+                placeholder="Paste the link here (long-press → Paste)"
+                className="focus-ring w-full px-4 py-2.5 rounded-xl text-sm bg-white/10 border border-white/15 text-white placeholder-white/40"
+              />
+              <button
+                onClick={() => submitPastedLink(pasteInputValue)}
+                disabled={!pasteInputValue.trim() || pasteStatus === 'checking'}
+                className="focus-ring btn-primary px-5 py-2 rounded-xl text-sm disabled:opacity-40"
+              >
+                {pasteStatus === 'checking' ? 'Checking…' : 'Load Puzzle'}
+              </button>
+              {pasteStatus === 'invalid' && (
+                <p className="text-[12px] text-red-300 text-center">
+                  Couldn't find that link. Make sure you pasted the full link, then try again.
+                </p>
+              )}
+              {pasteStatus === 'network' && (
+                <p className="text-[12px] text-amber-300 text-center">
+                  Connection seems slow — retried a few times automatically. Please try once more.
+                </p>
+              )}
+            </div>
+          )}
+
           <p className="text-[11px] text-white/35 text-center px-4">
             If a paste or share doesn't work the first time, please try a couple more times — it's usually just a slow connection.
           </p>
