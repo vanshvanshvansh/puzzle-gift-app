@@ -108,17 +108,21 @@ export default function Play({ mode }) {
       return
     }
 
-    const match = text.match(/\/play\/([A-Za-z0-9_-]+)/)
-    if (!match) {
+    const cleaned = text.trim()
+    const playMatch = cleaned.match(/\/play\/([A-Za-z0-9_-]+)/)
+    const ownMatch = cleaned.match(/\/own\/([A-Za-z0-9_-]+)/)
+
+    if (!playMatch && !ownMatch) {
       setPasteStatus('invalid')
       setTimeout(() => setPasteStatus('idle'), 2500)
       return
     }
 
-    const pastedToken = match[1]
     let row
     try {
-      row = await getPuzzleByShareToken(pastedToken)
+      row = playMatch
+        ? await getPuzzleByShareToken(playMatch[1])
+        : await getPuzzleByOwnerToken(ownMatch[1])
     } catch (e) {
       console.error(e)
       setPasteStatus('network')
